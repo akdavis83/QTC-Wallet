@@ -1,0 +1,26 @@
+{
+  "name": "@noble/post-quantum",
+  "version": "0.5.2",
+  "exports": {
+    ".": "./src/index.ts",
+    "./_crystals.js": "./src/_crystals.ts",
+    "./hybrid.js": "./src/hybrid.ts",
+    "./ml-dsa.js": "./src/ml-dsa.ts",
+    "./ml-kem.js": "./src/ml-kem.ts",
+    "./slh-dsa.js": "./src/slh-dsa.ts",
+    "./utils.js": "./src/utils.ts"
+  },
+  "imports": {
+    "@noble/curves": "jsr:@noble/curves@~2.0.0",
+    "@noble/hashes": "jsr:@noble/hashes@~2.0.0"
+  },
+  "publish": {
+    "include": [
+      "src",
+      "jsr.json",
+      "LICENSE",
+      "README.md"
+    ]
+  },
+  "license": "MIT"
+}
