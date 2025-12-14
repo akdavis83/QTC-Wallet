@@ -1,15 +1,15 @@
 /**
- * QTC Quantum-Safe Wallet CLI (Pure JS)
- * Generates a quantum-safe address and keys using Kyber1024 and Dilithium3.
- * This version uses the production-grade noble-post-quantum JS libraries.
+ * QTC Quantum-Safe PQ-HD Wallet CLI (Pure JS)
+ * Generates a quantum-safe hierarchical deterministic wallet using Kyber1024 and Dilithium3.
+ * This implements QTC Core Method 2: PQ-HD Wallet for External Wallets.
  */
 
 import { bech32 } from "bech32";
 import { SHA3, SHAKE } from "sha3";
 
 // --- Main async function
-async function generateWallet() {
-  console.error("--- Starting Quantum-Safe Wallet Generation (using noble-post-quantum) ---");
+async function generatePQHDWallet() {
+  console.error("--- Starting Quantum-Safe PQ-HD Wallet Generation (External Wallet Method) ---");
 
   // Dynamic imports for crypto and fs
   const crypto = await import("crypto");
@@ -19,7 +19,7 @@ async function generateWallet() {
   const { ml_kem1024 } = await import("./noble-post-quantum JS/src/ml-kem.js");
   const { ml_dsa65 } = await import("./noble-post-quantum JS/src/ml-dsa.js");
 
-  // --- 1. Generate Kyber Keypair and Shared Secret
+  // --- 1. Generate Kyber1024 Keypair and Shared Secret
   let kyber_pk, kyber_sk, sharedSecret;
   try {
     // Generate a random seed for Kyber key generation
@@ -40,65 +40,79 @@ async function generateWallet() {
     process.exit(1);
   }
 
-  // --- 2. Derive Entropy for Deterministic Dilithium Key Generation using SHAKE256
-  const shake256 = new SHAKE(256);
-  shake256.update(sharedSecret);
-  const entropy = shake256.digest(64); // 64 bytes for Dilithium3 seed
-  console.error(`[✓] Entropy derived (SHAKE256): ${entropy.toString("hex").slice(0, 32)}...`);
-
-  // --- 3. Generate Dilithium3 Keypair
+  // --- 2. Generate Dilithium3 Keypair (Deterministic from Kyber shared secret)
   let dilithium_pk, dilithium_sk;
   try {
-    // The keygen function takes a seed. We will use the first 32 bytes of the entropy.
-    const dilithiumKeyPair = ml_dsa65.keygen(entropy.slice(0, 32));
+    // Generate deterministic seed for Dilithium from Kyber shared secret using SHAKE256 with customization
+    const shake256 = new SHAKE(256);
+    shake256.update(sharedSecret);
+    shake256.update(Buffer.from("QTC_PQHD_DILITHIUM", "utf8"));
+    const dilithium_seed = shake256.digest(32); // 32 bytes for Dilithium3
+    const dilithiumKeyPair = ml_dsa65.keygen(dilithium_seed);
     dilithium_pk = dilithiumKeyPair.publicKey;
     dilithium_sk = dilithiumKeyPair.secretKey;
-    console.error("[✓] Dilithium3 deterministic keypair generated.");
+    console.error("[✓] Dilithium3 deterministic keypair generated (PQ-HD method).");
   } catch (err) {
     console.error("[ERROR] Dilithium key generation failed:", err);
     process.exit(1);
   }
 
-  // --- 4. Generate QTC Address from Dilithium Public Key (MATCH QTC CORE)
-  // a) Hash the Dilithium public key using SHA3-256 (QUANTUM-SAFE)
+  // --- 3. Derive Master Entropy using SHAKE256(KyberSharedSecret || DilithiumPublicKey)
+  const shake256_master = new SHAKE(256);
+  shake256_master.update(sharedSecret);
+  shake256_master.update(Buffer.from(dilithium_pk));
+  const master_entropy = shake256_master.digest(64); // 64 bytes master entropy
+  console.error(`[✓] Master entropy derived (SHAKE256): ${master_entropy.toString("hex").slice(0, 32)}...`);
+
+  // --- 4. Generate PQ-HD Address from Master Entropy (PQ-HD Method)
+  // a) Hash the master entropy using SHA3-256 (QUANTUM-SAFE)
   const hash = new SHA3(256);
-  hash.update(Buffer.from(dilithium_pk));
-  const pkHash = hash.digest();
+  hash.update(Buffer.from(master_entropy));
+  const entropyHash = hash.digest();
 
   // b) Get the first 20 bytes (160 bits) of the hash
-  const addressBytes = pkHash.slice(0, 20);
+  const addressBytes = entropyHash.slice(0, 20);
 
-  // c) Convert to bech32m with "qtc" prefix and witness version 1 (MATCHES QTC CORE)
-  const witnessVersion = 1;
+  // c) Convert to bech32m with "qtc" prefix and witness version 2 (PQ-HD method)
+  const witnessVersion = 2;
   const witnessProgram = Array.from(addressBytes);
   const words = bech32.toWords(witnessProgram);
   const data = [witnessVersion, ...words];
   const address = bech32.encode("qtc", data);
-  console.error(`[✓] Generated QTC Address: ${address}`);
+  console.error(`[✓] Generated PQ-HD Address: ${address}`);
 
-  // --- 5. Assemble the final wallet JSON
-  const wallet = {
+  // --- 5. Assemble the final PQ-HD wallet JSON
+  const pqhd_wallet = {
     address: address,
-    entropy_b64: entropy.toString("base64"),
+    method: "PQ-HD",
+    witness_version: 2,
+    master_entropy_b64: master_entropy.toString("base64"),
     kyber_public_b64: Buffer.from(kyber_pk).toString("base64"),
     kyber_private_b64: Buffer.from(kyber_sk).toString("base64"),
     dilithium_public_b64: Buffer.from(dilithium_pk).toString("base64"),
     dilithium_private_b64: Buffer.from(dilithium_sk).toString("base64"),
-    shared_secret_b64: sharedSecret.toString("base64"),
+    kyber_shared_secret_b64: sharedSecret.toString("base64"),
+    combined_input_b64: combined_input.toString("base64"),
+    algorithm: "Kyber1024-KEM + Dilithium3-DSA (Deterministic PQ-HD)",
+    quantum_safe: true,
+    version: "QTC-PQHD-1.0",
+    description: "QTC PQ-HD Wallet for External Wallet Integration"
   };
 
   // --- 6. Save to file and print
   try {
-    fs.writeFileSync("qti2_wallet.json", JSON.stringify(wallet, null, 2));
-    console.error("\n[SUCCESS] Wallet generated and saved to 'qti2_wallet.json'");
+    fs.writeFileSync("qti3_pqhd_wallet.json", JSON.stringify(pqhd_wallet, null, 2));
+    console.error("\n[SUCCESS] PQ-HD Wallet generated and saved to 'qti3_pqhd_wallet.json'");
     // ONLY print the JSON to stdout
-    console.log(JSON.stringify(wallet, null, 2));
+    console.log(JSON.stringify(pqhd_wallet, null, 2));
   } catch (err) {
     console.error("[ERROR] Could not write wallet file:", err);
     process.exit(1); // Exit with error if file write fails
   }
   
-  console.error("\n--- Generation Complete ---");
+  console.error("\n--- PQ-HD Wallet Generation Complete ---");
+  console.error("[INFO] This wallet uses QTC Core Method 2: PQ-HD for External Wallets");
+  console.error("[INFO] Address uses witness version 2 (different from Primary method version 1)");
 }
 
 // --- JSON-RPC helper and CLI for wallet ops
@@ -213,7 +227,7 @@ async function cmdBroadcast(args) {
   const cmd = args._[0] || 'generate';
   try {
     if (cmd === 'generate') {
-      await generateWallet();
+      await generatePQHDWallet();
     } else if (cmd === 'balance') {
       await cmdBalance(args);
     } else if (cmd === 'send') {
