@@ -1,7 +1,7 @@
-# Q4 Upgrade Documentation
+# QTC CLI Documentation
 
 ## Overview
-The Q4 wallet scripts (`qti2.js`, `qti3.js`, `qti3_hd.js`) have been upgraded to eliminate the dependency on the pure JavaScript `noble-post-quantum` library. They now exclusively use the `liboqs` C library via a custom-built CLI tool (`oqs_wallet_cli`).
+The QTC wallet scripts (`qti2.js`, `qti3.js`, `qti3_hd.js`) have been upgraded to eliminate the dependency on the pure JavaScript `noble-post-quantum` library. They now exclusively use the `liboqs` C library via a custom-built CLI tool (`oqs_wallet_cli`).
 
 ## Upgraded Scripts
 
