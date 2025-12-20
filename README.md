@@ -46,7 +46,7 @@ The CLI is built automatically when running any of the `qti*.js` scripts.
 - **Script:** Uses the existing `Makefile`.
 
 ## Usage
-Run the scripts as normal:
+Run the scripts using node:
 ```bash
 node qti2.js
 node qti3.js
