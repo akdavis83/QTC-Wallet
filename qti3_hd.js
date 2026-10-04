@@ -35,7 +35,7 @@ function ensureCliBuilt() {
 }
 
 /**
- * QTC Quantum-Safe PQ-HD HD Wallet CLI (Pure JS)
+ * QTC Quantum-Safe PQ-HD HD Wallet CLI (liboqs C CLI)
  */
 
 // --- HD Path Implementation for QTC

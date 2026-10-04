@@ -1,11 +1,42 @@
-/**
- * QTC Quantum-Safe PQ-HD HD Wallet CLI (Pure JS)
- * Generates multiple quantum-safe hierarchical deterministic addresses using Kyber1024 and Dilithium3.
- * This implements QTC Core Method 2: PQ-HD Wallet with HD derivation support.
- */
-
 import { bech32 } from "bech32";
 import { SHA3, SHAKE } from "sha3";
+const fs = await import("fs");
+const path = await import("path");
+const { spawnSync } = await import("child_process");
+
+const url = await import("url");
+
+function ensureCliBuilt() {
+    const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+    const cliDir = path.resolve(__dirname, "q4_lib/oqs_wallet_cli");
+    
+    const isWin = process.platform === 'win32';
+    const cliBinName = isWin ? "build/oqs_wallet_cli.exe" : "build/oqs_wallet_cli";
+    const cliBin = path.join(cliDir, cliBinName);
+
+    if (!fs.existsSync(cliBin)) {
+        console.error("[info] oqs_wallet_cli not found, building...");
+        let cmd, args;
+        if (isWin) {
+            cmd = "cmd.exe";
+            args = ["/c", "build_cli_win.bat"];
+        } else {
+            cmd = "make";
+            args = [];
+        }
+        
+        const mk = spawnSync(cmd, args, { cwd: cliDir, stdio: "inherit" });
+        if (mk.status !== 0) {
+            console.error("[ERROR] Failed to build oqs_wallet_cli. Please ensure you have a C/C++ compiler installed.");
+            process.exit(1);
+        }
+    }
+    return cliBin;
+}
+
+/**
+ * QTC Quantum-Safe PQ-HD HD Wallet CLI (liboqs C CLI)
+ */
 
 // --- HD Path Implementation for QTC
 class QTCHDPath {
@@ -73,14 +104,16 @@ class QTCHDNode {
   // Generate Dilithium3 keypair from node entropy
   async generateKeyPair() {
     const crypto = await import("crypto");
-    const { ml_dsa65 } = await import("./noble-post-quantum JS/src/ml-dsa.js");
 
     // Use first 32 bytes of node entropy as Dilithium seed
     const dilithiumSeed = this.masterEntropy.slice(0, 32);
-    const keyPair = ml_dsa65.keygen(dilithiumSeed);
-    
-    this.privateKey = keyPair.secretKey;
-    this.publicKey = keyPair.publicKey;
+    const seed_hex = Buffer.from(dilithiumSeed).toString('hex');
+    const res = spawnSync(ensureCliBuilt(), ['gen_dilithium_from_seed', seed_hex], { encoding: 'utf8' });
+    if (res.status !== 0) throw new Error(res.stderr || 'oqs_wallet_cli failed');
+    const out = JSON.parse(res.stdout);
+    this.publicKey = Buffer.from(out.dilithium_public_b64, 'base64');
+    this.privateKey = Buffer.from(out.dilithium_private_b64, 'base64');
+    const keyPair = { publicKey: this.publicKey, secretKey: this.privateKey };
     
     return keyPair;
   }
@@ -125,28 +158,34 @@ class QTCPQHDWallet {
     console.error("--- Starting PQ-HD Master Wallet Generation ---");
 
     const crypto = await import("crypto");
-    const { ml_kem1024 } = await import("./noble-post-quantum JS/src/ml-kem.js");
+    const { spawnSync } = await import('child_process');
 
     // Step 1: Generate Kyber1024 keypair and shared secret
-    const kyber_seed = crypto.randomBytes(64);
-    const kyberKeyPair = ml_kem1024.keygen(kyber_seed);
-    this.kyberPublicKey = kyberKeyPair.publicKey;
-    this.kyberSecretKey = kyberKeyPair.secretKey;
-    
-    const { cipherText, sharedSecret: ss1 } = ml_kem1024.encapsulate(this.kyberPublicKey);
-    const ss2 = ml_kem1024.decapsulate(cipherText, this.kyberSecretKey);
-    this.sharedSecret = Buffer.from(ss1);
+    const cli = ensureCliBuilt();
+    const seed_hex = Buffer.from(crypto.randomBytes(64)).toString("hex");
+    const r1 = spawnSync(cli, ["kem_self_from_seed", seed_hex], { encoding: "utf8" });
+    if (r1.status !== 0) { throw new Error(r1.stderr||"kem_self failed"); }
+    const o1 = JSON.parse(r1.stdout);
+    this.kyberPublicKey = Buffer.from(o1.kyber_public_b64, "base64");
+    this.kyberSecretKey = Buffer.from(o1.kyber_private_b64, "base64");
+    this.sharedSecret = Buffer.from(o1.shared_b64, "base64");
     
     console.error("[✓] Kyber KEM completed, shared secret established.");
 
     // Step 2: Generate deterministic Dilithium3 keypair from Kyber shared secret using SHAKE256
-    const { ml_dsa65 } = await import("./noble-post-quantum JS/src/ml-dsa.js");
     const shake256 = new SHAKE(256);
     shake256.update(this.sharedSecret);
     shake256.update(Buffer.from("QTC_PQHD_DILITHIUM", "utf8"));
     const dilithium_seed = shake256.digest(32); // 32 bytes for Dilithium3
-    const dilithiumKeyPair = ml_dsa65.keygen(dilithium_seed);
-    const dilithiumPublicKey = dilithiumKeyPair.publicKey;
+    
+    // Call oqs_wallet_cli for Dilithium generation
+    const seed_hex_di = Buffer.from(dilithium_seed).toString('hex');
+    const res_di = spawnSync(ensureCliBuilt(), ['gen_dilithium_from_seed', seed_hex_di], { encoding: 'utf8' });
+    if (res_di.status !== 0) throw new Error(res_di.stderr || 'oqs_wallet_cli failed for Dilithium');
+    const out_di = JSON.parse(res_di.stdout);
+    
+    const dilithiumPublicKey = Buffer.from(out_di.dilithium_public_b64, 'base64');
+    const dilithiumSecretKey = Buffer.from(out_di.dilithium_private_b64, 'base64');
 
     console.error("[✓] Dilithium3 deterministic keypair generated.");
 
@@ -166,7 +205,7 @@ class QTCPQHDWallet {
       kyber_public_b64: Buffer.from(this.kyberPublicKey).toString("base64"),
       kyber_private_b64: Buffer.from(this.kyberSecretKey).toString("base64"),
       dilithium_public_b64: Buffer.from(dilithiumPublicKey).toString("base64"),
-      dilithium_private_b64: Buffer.from(dilithiumKeyPair.secretKey).toString("base64"),
+      dilithium_private_b64: Buffer.from(dilithiumSecretKey).toString("base64"),
       kyber_shared_secret_b64: this.sharedSecret.toString("base64"),
       master_entropy_b64: this.masterEntropy.toString("base64"),
       combined_input_b64: combinedInput.toString("base64")

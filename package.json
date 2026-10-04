@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "dependencies": {
     "bech32": "^2.0.0",
     "sha3": "^2.1.4"

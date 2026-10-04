@@ -1,42 +1,67 @@
-/**
- * QTC Quantum-Safe Wallet CLI (Pure JS)
- * Generates a quantum-safe address and keys using Kyber1024 and Dilithium3.
- * This version uses the production-grade noble-post-quantum JS libraries.
- */
-
 import { bech32 } from "bech32";
 import { SHA3, SHAKE } from "sha3";
+const fs = await import("fs");
+const path = await import("path");
+const { spawnSync } = await import("child_process");
+const url = await import("url");
+
+function ensureCliBuilt() {
+    const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+    const cliDir = path.resolve(__dirname, "q4_lib/oqs_wallet_cli");
+    
+    const isWin = process.platform === 'win32';
+    const cliBinName = isWin ? "build/oqs_wallet_cli.exe" : "build/oqs_wallet_cli";
+    const cliBin = path.join(cliDir, cliBinName);
+
+    if (!fs.existsSync(cliBin)) {
+        console.error("[info] oqs_wallet_cli not found, building...");
+        let cmd, args;
+        if (isWin) {
+            cmd = "cmd.exe";
+            args = ["/c", "build_cli_win.bat"];
+        } else {
+            cmd = "make";
+            args = [];
+        }
+        
+        const mk = spawnSync(cmd, args, { cwd: cliDir, stdio: "inherit" });
+        if (mk.status !== 0) {
+            console.error("[ERROR] Failed to build oqs_wallet_cli. Please ensure you have a C/C++ compiler installed.");
+            process.exit(1);
+        }
+    }
+    return cliBin;
+}
+
+/**
+ * QTC Quantum-Safe Wallet CLI (liboqs C CLI)
+ */
 
 // --- Main async function
 async function generateWallet() {
-  console.error("--- Starting Quantum-Safe Wallet Generation (using noble-post-quantum) ---");
+  console.error("--- Starting Quantum-Safe Wallet Generation (using liboqs) ---");
 
   // Dynamic imports for crypto and fs
   const crypto = await import("crypto");
   const fs = await import("fs");
 
-  // Dynamic imports for noble-post-quantum libraries
-  const { ml_kem1024 } = await import("./noble-post-quantum JS/src/ml-kem.js");
-  const { ml_dsa65 } = await import("./noble-post-quantum JS/src/ml-dsa.js");
+  // Use liboqs via native CLI bridge
+  const { spawnSync } = await import('child_process');
 
-  // --- 1. Generate Kyber Keypair and Shared Secret
+  // --- 1. Generate Kyber Keypair deterministically from random seed using liboqs CLI
   let kyber_pk, kyber_sk, sharedSecret;
   try {
-    // Generate a random seed for Kyber key generation
-    const kyber_seed = crypto.randomBytes(64);
-    const kyberKeyPair = ml_kem1024.keygen(kyber_seed);
-    kyber_pk = kyberKeyPair.publicKey;
-    kyber_sk = kyberKeyPair.secretKey;
-    
-    const { cipherText: cipher, sharedSecret: ss1 } = ml_kem1024.encapsulate(kyber_pk);
-    const ss2 = ml_kem1024.decapsulate(cipher, kyber_sk);
-    
-    // The shared secret is the same from encapsulate and decapsulate
-    sharedSecret = Buffer.from(ss1);
-    
-    console.error("[✓] Kyber KEM completed, shared secret established.");
+    const cli = ensureCliBuilt();
+    const seed_hex = Buffer.from(crypto.randomBytes(64)).toString("hex");
+    const r1 = spawnSync(cli, ["kem_self_from_seed", seed_hex], { encoding: "utf8" });
+    if (r1.status !== 0) { console.error(r1.stderr||"kem_self failed"); process.exit(1); }
+    const o1 = JSON.parse(r1.stdout);
+    kyber_pk = Buffer.from(o1.kyber_public_b64, "base64");
+    kyber_sk = Buffer.from(o1.kyber_private_b64, "base64");
+    sharedSecret = Buffer.from(o1.shared_b64, "base64");
+    console.error('[✓] Kyber keypair and shared secret generated via CLI (kem_self).');
   } catch (err) {
-    console.error("[ERROR] Kyber operation failed:", err);
+    console.error('[ERROR] Kyber/liboqs operation failed:', err);
     process.exit(1);
   }
 
@@ -49,13 +74,15 @@ async function generateWallet() {
   // --- 3. Generate Dilithium3 Keypair
   let dilithium_pk, dilithium_sk;
   try {
-    // The keygen function takes a seed. We will use the first 32 bytes of the entropy.
-    const dilithiumKeyPair = ml_dsa65.keygen(entropy.slice(0, 32));
-    dilithium_pk = dilithiumKeyPair.publicKey;
-    dilithium_sk = dilithiumKeyPair.secretKey;
-    console.error("[✓] Dilithium3 deterministic keypair generated.");
+    const seed_hex = Buffer.from(entropy.slice(0, 32)).toString('hex');
+    const res = spawnSync(ensureCliBuilt(), ['gen_dilithium_from_seed', seed_hex], { encoding: 'utf8' });
+    if (res.status !== 0) throw new Error(res.stderr || 'oqs_wallet_cli failed');
+    const out = JSON.parse(res.stdout);
+    dilithium_pk = Buffer.from(out.dilithium_public_b64, 'base64');
+    dilithium_sk = Buffer.from(out.dilithium_private_b64, 'base64');
+    console.error('[✓] Dilithium3 deterministic keypair generated (liboqs).');
   } catch (err) {
-    console.error("[ERROR] Dilithium key generation failed:", err);
+    console.error('[ERROR] Dilithium/liboqs key generation failed:', err);
     process.exit(1);
   }
 
@@ -102,7 +129,6 @@ async function generateWallet() {
 }
 
 // --- JSON-RPC helper and CLI for wallet ops
-import fetch from 'node-fetch';
 
 async function rpcCall({ url, user, pass }, method, params = []) {
   const res = await fetch(url, {
